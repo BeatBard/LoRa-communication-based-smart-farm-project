@@ -111,7 +111,7 @@ void loop() {
     publishJSON();
     drawOLED();
 
-    const float SUNLIGHT_THRESHOLD = 10000.0;
+    const float SUNLIGHT_THRESHOLD = 9;
     const bool isDry = moistP < atof(SOIL_TOPIC); // Use given SOIL_TOPIC
     const bool isRaining = weather.indexOf("Rain") != -1;
     const bool isTooSunny = lux > SUNLIGHT_THRESHOLD;
@@ -146,6 +146,7 @@ void connectMQTT(){
     if(mqtt.connect("ESP32-LoRa-GW")){
       Serial.println("connected");
       mqtt.subscribe(CMD_TOPIC);
+      mqtt.subscribe(SOIL_TOPIC);
     }else{
       Serial.print(mqtt.state()); Serial.println(" retry"); delay(2000);
     }
