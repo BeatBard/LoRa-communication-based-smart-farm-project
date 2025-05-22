@@ -58,7 +58,7 @@ void publishJSON(),  drawOLED();
 String extractStr(const String&,const String&);
 float  extractFloat(const String&,const String&);
 String getTimestamp();
-
+static float soilThreshold = 30.0;
 /* ---------- LoRa ISR ---------- */
 void IRAM_ATTR onPacketISR(int) { packetReady = true; }
 void mqttCallback(char* topic, byte* payload, unsigned int len);
@@ -112,7 +112,7 @@ void loop() {
     drawOLED();
 
     const float SUNLIGHT_THRESHOLD = 9;
-    const bool isDry = moistP < atof(SOIL_TOPIC); // Use given SOIL_TOPIC
+    const bool isDry = moistP < soilThreshold; // Use given SOIL_TOPIC
     const bool isRaining = weather.indexOf("Rain") != -1;
     const bool isTooSunny = lux > SUNLIGHT_THRESHOLD;
     static bool lastCommand = false;
@@ -158,6 +158,18 @@ void mqttCallback(char* topic, byte* payload, unsigned len) {
   for (uint32_t i = 0; i < len; i++) msg += (char)payload[i];
   msg.trim(); msg.toUpperCase();
   Serial.println("CMD from MQTT: " + msg);
+  // If MQTT message is an integer, set soil threshold to that value
+  bool isInt = true;
+  for (uint32_t i = 0; i < msg.length(); ++i) {
+    if (!isDigit(msg[i])) { isInt = false; break; }
+  }
+   // Default threshold
+  if (isInt && msg.length() > 0) {
+    soilThreshold = msg.toFloat();
+    Serial.printf("Soil threshold set to %.1f\n", soilThreshold);
+    return;
+  }
+  if (msg)
   if (msg != "TRUE" && msg != "FALSE") return;
   LoRa.idle();
   if (LoRa.beginPacket() && LoRa.print("CMD:" + msg) && LoRa.endPacket()) {
