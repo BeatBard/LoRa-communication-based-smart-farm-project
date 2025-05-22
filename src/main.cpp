@@ -22,14 +22,16 @@ const char* WIFI_PASS  = "11111111";
 const char* MQTT_HOST  = "test.mosquitto.org";
 const uint16_t MQTT_PORT = 1883;
 const char* PUB_TOPIC  = "IoT-G9";
+const char* VAL_TOPIC = "IoT-G9/valve";
 const char* CMD_TOPIC  = "IoT-G9/cmd";
 const char* SOIL_TOPIC = "IoT-G9/soil";
+// 16x16 emoji bitmaps
 
 /* ---------- NTP ---------- */
 const char* NTP_SERVER = "pool.ntp.org";
 const long  GMT_OFFSET_SEC = 5 * 3600 + 30 * 60;  // Sri Lanka GMT+5:30
 const int   DAYLIGHT_OFFSET_SEC = 0;
-
+bool lastCommand = false; // Default to false
 /* ---------- LoRa ---------- */
 constexpr long RF_FREQ = 433E6;
 constexpr uint8_t SYNC_WORD = 0xA5;
@@ -50,7 +52,7 @@ PubSubClient    mqtt(net);
 
 /* ---------- Shared data ---------- */
 volatile bool packetReady = false;
-String weather="N/A"; float tempC=NAN, humP=NAN, lux=NAN, moistP=NAN;
+String weather="N/A", valve="N/A"; float tempC=NAN, humP=NAN, lux=NAN, moistP=NAN;
 
 /* ---------- Prototypes ---------- */
 void connectWiFi(),  connectMQTT();
@@ -58,6 +60,7 @@ void publishJSON(),  drawOLED();
 String extractStr(const String&,const String&);
 float  extractFloat(const String&,const String&);
 String getTimestamp();
+char weatherIconAscii(const String&, float);
 static float soilThreshold = 30.0;
 /* ---------- LoRa ISR ---------- */
 void IRAM_ATTR onPacketISR(int) { packetReady = true; }
@@ -105,9 +108,14 @@ void loop() {
     humP   =extractFloat(raw,"Hum:"); if(isnan(humP)) humP=extractFloat(raw,"Hm:");
     lux    =extractFloat(raw,"Light level:"); if(isnan(lux)) lux=extractFloat(raw,"Lux:"); if(isnan(lux)) lux=extractFloat(raw,"Lx:");
     moistP =extractFloat(raw,"Moisture:");
-
-    Serial.printf("RX: %s | T %.1f | H %.1f | L %.1f | M %.0f%%\n",
-                  weather.c_str(),tempC,humP,lux,moistP);
+    valve  = extractStr(raw, "Valve:");
+    // Update lastCommand based on received valve string
+    if (valve == "OPEN") lastCommand = true;
+    else if (valve == "CLOSE") lastCommand = false;
+    // Publish valve string to VAL_TOPIC
+    mqtt.publish(VAL_TOPIC, valve.c_str());
+    Serial.printf("RX: %s | T %.1f | H %.1f | L %.1f | M %.0f%% | V %s\n",
+                  weather.c_str(), tempC, humP, lux, moistP, valve.c_str());
     publishJSON();
     drawOLED();
 
@@ -115,9 +123,8 @@ void loop() {
     const bool isDry = moistP < soilThreshold; // Use given SOIL_TOPIC
     const bool isRaining = weather.indexOf("Rain") != -1;
     const bool isTooSunny = lux > SUNLIGHT_THRESHOLD;
-    static bool lastCommand = false;
     bool newCommand = (isDry && !isRaining && !isTooSunny);
-
+    bool lastCommand = false; // Default to false
     if (newCommand != lastCommand) {
       lastCommand = newCommand;
       String cmd = newCommand ? "TRUE" : "FALSE";
@@ -192,15 +199,79 @@ void publishJSON(){
   mqtt.publish(PUB_TOPIC, buf, n);
 }
 
-void drawOLED(){
-  static uint32_t last=0; if(millis()-last<OLED_INTERVAL) return; last=millis();
-  oled.fillRect(0,18,128,46,SSD1306_BLACK);
-  oled.setCursor(0,18); oled.setTextSize(1);
-  oled.printf("Weather: %s\n",weather.c_str());
-  oled.printf("Temp: %.1fC\n",tempC);
-  oled.printf("Hum:  %.1f%%\n",humP);
-  oled.printf("Light: %.1f\n",lux);
-  oled.printf("Moist: %.0f%%",moistP); oled.display();
+void drawOLED() {
+  static uint32_t last = 0;
+  if (millis() - last < OLED_INTERVAL) return;
+  last = millis();
+
+  oled.clearDisplay();
+
+  // --- Icons and Readings ---
+  oled.setTextSize(1);
+  oled.setTextColor(SSD1306_WHITE);
+
+  // Thermometer icon (Temperature)
+  oled.drawLine(2, 4, 2, 14, SSD1306_WHITE);           // Stem
+  oled.fillCircle(2, 16, 2, SSD1306_WHITE);            // Bulb
+  oled.setCursor(10, 5);
+  oled.printf("T:%.1fC", tempC);
+
+  // Humidity icon (drop)
+  oled.fillTriangle(64, 4, 60, 12, 68, 12, SSD1306_WHITE); // Water drop
+  oled.setCursor(72, 5);
+  oled.printf("H:%.1f%%", humP);
+
+  // Light icon (Sun)
+  oled.drawCircle(2, 30, 3, SSD1306_WHITE);            // Sun core
+  for (int a = 0; a < 360; a += 45) {
+    int x0 = 2 + 5 * cos(a * DEG_TO_RAD);
+    int y0 = 30 + 5 * sin(a * DEG_TO_RAD);
+    int x1 = 2 + 7 * cos(a * DEG_TO_RAD);
+    int y1 = 30 + 7 * sin(a * DEG_TO_RAD);
+    oled.drawLine(x0, y0, x1, y1, SSD1306_WHITE);
+  }
+  oled.setCursor(10, 25);
+  oled.printf("L:%.1f lx", lux);
+
+  // Moisture icon (plant/soil)
+  oled.fillCircle(66, 30, 2, SSD1306_WHITE);           // Soil dot
+  oled.drawLine(66, 30, 66, 34, SSD1306_WHITE);        // Stem
+  oled.drawLine(66, 32, 63, 29, SSD1306_WHITE);        // Left leaf
+  oled.drawLine(66, 32, 69, 29, SSD1306_WHITE);        // Right leaf
+  oled.setCursor(72, 25);
+  oled.printf("M:%.0f%%", moistP);
+
+  // Weather icon (simple cloud or rain)
+  char icon = weatherIconAscii(weather, lux);
+  oled.setCursor(0, 43);
+  oled.printf("W: %s", weather.c_str());
+
+  if (icon == 'R') {
+    oled.fillRect(100, 42, 3, 3, SSD1306_WHITE);       // Rain drop
+    oled.fillCircle(105, 40, 3, SSD1306_WHITE);        // Cloud
+  } else if (icon == 'S') {
+    oled.drawCircle(105, 40, 3, SSD1306_WHITE);        // Sun
+  } else {
+    oled.fillCircle(105, 40, 3, SSD1306_WHITE);        // Cloud
+  }
+
+  // Timestamp
+  oled.setCursor(0, 54);
+  oled.setTextSize(1);
+  oled.printf("%s", getTimestamp().c_str());
+
+  // Valve state
+  oled.setCursor(90, 54);
+  oled.printf("Valve:%s", valve.c_str());
+
+  oled.display();
+}
+
+char weatherIconAscii(const String& w,float luxVal){
+  String u=w; u.toUpperCase();
+  if (u.indexOf("RAIN")!=-1) return 'R';        // Rain
+  if (luxVal>9)              return 'S';        // Sunny / bright
+  return 'C';                                   // Cloud/other
 }
 
 String extractStr(const String& s,const String& tag){

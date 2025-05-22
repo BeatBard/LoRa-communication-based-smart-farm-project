@@ -1,0 +1,6 @@
+{
+    "files.associations": {
+        "config": "code-text-binary",
+        "cmath": "cpp"
+    }
+}
