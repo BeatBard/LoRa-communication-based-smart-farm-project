@@ -150,7 +150,7 @@ void mqttCallback(char* topic, byte* payload, unsigned len) {
   if (LoRa.endPacket() == 0) {
     Serial.println("Error: LoRa endPacket failed");
   } else {
-    Serial.println("Message sent"); // eg. "CMD:ON"
+    Serial.println("sent "+msg); // eg. "CMD:ON"
   }
   LoRa.receive(); // back to RX
 }
