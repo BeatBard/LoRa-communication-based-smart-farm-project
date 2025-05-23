@@ -17,6 +17,62 @@
 #include <sys/time.h>
 
 /* ---------- Wi-Fi & MQTT ---------- */
+// Weather and sensor emojis (8x8 pixels)
+const unsigned char temp_emoji[] = {
+    0b00001100,
+    0b00010010,
+    0b00010010,
+    0b00010010,
+    0b00011110,
+    0b00011110,
+    0b00011110,
+    0b00001100
+};
+
+const unsigned char rain_emoji[] = {
+    0b00111100,
+    0b01111110,
+    0b01111110,
+    0b00111100,
+    0b00001000,
+    0b00010100,
+    0b00001000,
+    0b00000100
+};
+
+const unsigned char droplet_emoji[] = {
+    0b00001000,
+    0b00011100,
+    0b00111110,
+    0b01111111,
+    0b01111111,
+    0b00111110,
+    0b00011100,
+    0b00001000
+};
+
+const unsigned char sun_emoji[] = {
+    0b00001000,
+    0b00101010,
+    0b00011100,
+    0b01111111,
+    0b00011100,
+    0b00101010,
+    0b00001000,
+    0b00000000
+};
+
+const unsigned char moisture_emoji[] = {
+    0b00001000,    // Single drop
+    0b00011100,
+    0b00111110,
+    0b00001000,    // Second drop
+    0b00011100,
+    0b00111110,
+    0b00001000,    // Third drop
+    0b00011100
+};
+
 const char* WIFI_SSID  = "Pamith";
 const char* WIFI_PASS  = "11111111";
 const char* MQTT_HOST  = "test.mosquitto.org";
@@ -93,6 +149,7 @@ void setup() {
 }
 
 void loop() {
+  // Serial.print(lastCommand);
   if(WiFi.status()!=WL_CONNECTED) connectWiFi();
   if(!mqtt.connected())           connectMQTT();
   mqtt.loop();
@@ -120,9 +177,11 @@ void loop() {
 
     // Auto mode valve control logic
     if (!isManualMode) {
-      const float SUNLIGHT_THRESHOLD = 9;
+      const float SUNLIGHT_THRESHOLD = 10; // Lux threshold for too sunny
       const bool isDry = moistP < soilThreshold;
-      const bool isRaining = weather.indexOf("Rain") != -1;
+      String weatherUpper = weather;
+      weatherUpper.toUpperCase();
+      const bool isRaining = weather.length() > 0 && weatherUpper.indexOf("RAIN") != -1;
       const bool isTooSunny = lux > SUNLIGHT_THRESHOLD;
       bool newCommand = (isDry && !isRaining && !isTooSunny);
       
@@ -130,10 +189,17 @@ void loop() {
         lastCommand = newCommand;
         String cmd = newCommand ? "TRUE" : "FALSE";
         LoRa.idle();
-        if (LoRa.beginPacket() && LoRa.print(cmd) && LoRa.endPacket()) {
-          Serial.println("Auto CMD Sent: " + cmd);
-        } else {
-          Serial.println("LoRa CMD Send Failed");
+        const int maxRetries = 3;
+        int attempt = 0;
+        bool sent = false;
+        // Send the command multiple times with small delays, without checking for success
+        for (int i = 0; i < 3; ++i) {
+          if (LoRa.beginPacket() && LoRa.print("CMD:" + cmd) && LoRa.endPacket()) {
+            Serial.println("CMD:" + cmd + " sent (burst " + String(i + 1) + ")");
+          } else {
+            Serial.println("LoRa CMD Send Failed (burst " + String(i + 1) + ")");
+          }
+          delay(50); // Small delay between bursts
         }
         LoRa.receive();
       }
@@ -197,6 +263,12 @@ void mqttCallback(char* topic, byte* payload, unsigned len) {
   if (strcmp(topic, CMD_TOPIC) == 0 && isManualMode) {
     if (msg == "TRUE" || msg == "FALSE") {
       Serial.println("Manual CMD from MQTT: " + msg);
+      // Set lastCommand accordingly
+      if (msg == "TRUE") {
+        lastCommand = true;
+      } else if (msg == "FALSE") {
+        lastCommand = false;
+      }
       LoRa.idle();
       if (LoRa.beginPacket() && LoRa.print("CMD:" + msg) && LoRa.endPacket()) {
         Serial.println("Manual CMD sent: " + msg);
@@ -231,59 +303,56 @@ void drawOLED() {
   oled.setTextSize(1);
   oled.setTextColor(SSD1306_WHITE);
 
-  // Thermometer icon (Temperature)
-  oled.drawLine(2, 4, 2, 14, SSD1306_WHITE);           // Stem
-  oled.fillCircle(2, 16, 2, SSD1306_WHITE);            // Bulb
-  oled.setCursor(10, 5);
-  oled.printf("T:%.1fC", tempC);
+  // Temperature reading with thermometer emoji
+  oled.drawBitmap(2, 4, temp_emoji, 8, 8, SSD1306_WHITE);
+  oled.setCursor(12, 5);
+  oled.printf("%.1fC", tempC);
 
-  // Humidity icon (drop)
-  oled.fillTriangle(64, 4, 60, 12, 68, 12, SSD1306_WHITE); // Water drop
-  oled.setCursor(72, 5);
-  oled.printf("H:%.1f%%", humP);
+  // Humidity reading with droplet emoji
+  oled.drawBitmap(64, 4, droplet_emoji, 8, 8, SSD1306_WHITE);
+  oled.setCursor(74, 5);
+  oled.printf("%.1f%%", humP);
 
-  // Light icon (Sun)
-  oled.drawCircle(2, 30, 3, SSD1306_WHITE);            // Sun core
-  for (int a = 0; a < 360; a += 45) {
-    int x0 = 2 + 5 * cos(a * DEG_TO_RAD);
-    int y0 = 30 + 5 * sin(a * DEG_TO_RAD);
-    int x1 = 2 + 7 * cos(a * DEG_TO_RAD);
-    int y1 = 30 + 7 * sin(a * DEG_TO_RAD);
-    oled.drawLine(x0, y0, x1, y1, SSD1306_WHITE);
-  }
-  oled.setCursor(10, 25);
-  oled.printf("L:%.1f lx", lux);
+  // Light level with sun emoji
+  oled.drawBitmap(2, 22, sun_emoji, 8, 8, SSD1306_WHITE);
+  oled.setCursor(12, 23);
+  oled.printf("%.1f lx", lux);
 
-  // Moisture icon (plant/soil)
-  oled.fillCircle(66, 30, 2, SSD1306_WHITE);           // Soil dot
-  oled.drawLine(66, 30, 66, 34, SSD1306_WHITE);        // Stem
-  oled.drawLine(66, 32, 63, 29, SSD1306_WHITE);        // Left leaf
-  oled.drawLine(66, 32, 69, 29, SSD1306_WHITE);        // Right leaf
-  oled.setCursor(72, 25);
-  oled.printf("M:%.0f%%", moistP);
+  // Moisture reading with moisture emoji
+  oled.drawBitmap(64, 22, moisture_emoji, 8, 8, SSD1306_WHITE);
+  oled.setCursor(74, 23);
+  oled.printf("%.0f%%", moistP);
 
-  // Weather icon (simple cloud or rain)
-  char icon = weatherIconAscii(weather, lux);
-  oled.setCursor(0, 43);
-  oled.printf("W: %s", weather.c_str());
-
-  if (icon == 'R') {
-    oled.fillRect(100, 42, 3, 3, SSD1306_WHITE);       // Rain drop
-    oled.fillCircle(105, 40, 3, SSD1306_WHITE);        // Cloud
-  } else if (icon == 'S') {
-    oled.drawCircle(105, 40, 3, SSD1306_WHITE);        // Sun
+  // Weather status with dynamic weather icon
+  oled.setCursor(0, 40);
+  oled.printf("Weather: %s", weather.c_str());
+  
+  // Draw weather icon based on conditions
+  String weatherUpper = weather;
+  weatherUpper.toUpperCase();
+  if (weatherUpper.indexOf("RAIN") != -1) {
+    oled.drawBitmap(100, 38, rain_emoji, 8, 8, SSD1306_WHITE);
+  } else if (lux > 9) {
+    oled.drawBitmap(100, 38, sun_emoji, 8, 8, SSD1306_WHITE);
   } else {
-    oled.fillCircle(105, 40, 3, SSD1306_WHITE);        // Cloud
+    // Default cloud-like pattern for other conditions
+    oled.fillCircle(104, 42, 3, SSD1306_WHITE);
+    oled.fillCircle(100, 42, 2, SSD1306_WHITE);
+    oled.fillCircle(108, 42, 2, SSD1306_WHITE);
   }
 
-  // Timestamp
-  oled.setCursor(0, 54);
-  oled.setTextSize(1);
-  oled.printf("%s", getTimestamp().c_str());
+  // Time and valve state at bottom
+  struct tm timeinfo;
+  if (getLocalTime(&timeinfo)) {
+    char timeStr[9];
+    strftime(timeStr, sizeof(timeStr), "%H:%M:%S", &timeinfo);
+    oled.setCursor(0, 54);
+    oled.printf("%s", timeStr);
+  }
 
   // Valve state
-  oled.setCursor(90, 54);
-  oled.printf("Valve:%s", valve.c_str());
+  oled.setCursor(70, 54);
+  oled.printf("V:%s", valve.c_str());
 
   oled.display();
 }
