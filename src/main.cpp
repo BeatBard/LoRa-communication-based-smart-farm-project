@@ -25,7 +25,8 @@ const char* PUB_TOPIC  = "IoT-G9";
 const char* VAL_TOPIC = "IoT-G9/valve";
 const char* CMD_TOPIC  = "IoT-G9/cmd";
 const char* SOIL_TOPIC = "IoT-G9/soil";
-// 16x16 emoji bitmaps
+const char* MODE_TOPIC = "IoT-G9/mode";  // New topic for mode control
+bool isManualMode = false;  // false = auto mode, true = manual mode
 
 /* ---------- NTP ---------- */
 const char* NTP_SERVER = "pool.ntp.org";
@@ -109,32 +110,33 @@ void loop() {
     lux    =extractFloat(raw,"Light level:"); if(isnan(lux)) lux=extractFloat(raw,"Lux:"); if(isnan(lux)) lux=extractFloat(raw,"Lx:");
     moistP =extractFloat(raw,"Moisture:");
     valve  = extractStr(raw, "Valve:");
-    // Update lastCommand based on received valve string
-    if (valve == "OPEN") lastCommand = true;
-    else if (valve == "CLOSE") lastCommand = false;
-    // Publish valve string to VAL_TOPIC
+    
+    // Publish sensor data regardless of mode
     mqtt.publish(VAL_TOPIC, valve.c_str());
     Serial.printf("RX: %s | T %.1f | H %.1f | L %.1f | M %.0f%% | V %s\n",
                   weather.c_str(), tempC, humP, lux, moistP, valve.c_str());
     publishJSON();
     drawOLED();
 
-    const float SUNLIGHT_THRESHOLD = 9;
-    const bool isDry = moistP < soilThreshold; // Use given SOIL_TOPIC
-    const bool isRaining = weather.indexOf("Rain") != -1;
-    const bool isTooSunny = lux > SUNLIGHT_THRESHOLD;
-    bool newCommand = (isDry && !isRaining && !isTooSunny);
-    bool lastCommand = false; // Default to false
-    if (newCommand != lastCommand) {
-      lastCommand = newCommand;
-      String cmd = newCommand ? "TRUE" : "FALSE";
-      LoRa.idle();
-      if (LoRa.beginPacket() && LoRa.print(cmd) && LoRa.endPacket()) {
-        Serial.println("Auto CMD Sent: " + cmd);
-      } else {
-        Serial.println("LoRa CMD Send Failed");
+    // Auto mode valve control logic
+    if (!isManualMode) {
+      const float SUNLIGHT_THRESHOLD = 9;
+      const bool isDry = moistP < soilThreshold;
+      const bool isRaining = weather.indexOf("Rain") != -1;
+      const bool isTooSunny = lux > SUNLIGHT_THRESHOLD;
+      bool newCommand = (isDry && !isRaining && !isTooSunny);
+      
+      if (newCommand != lastCommand) {
+        lastCommand = newCommand;
+        String cmd = newCommand ? "TRUE" : "FALSE";
+        LoRa.idle();
+        if (LoRa.beginPacket() && LoRa.print(cmd) && LoRa.endPacket()) {
+          Serial.println("Auto CMD Sent: " + cmd);
+        } else {
+          Serial.println("LoRa CMD Send Failed");
+        }
+        LoRa.receive();
       }
-      LoRa.receive();
     }
     LoRa.receive();
   }
@@ -154,6 +156,7 @@ void connectMQTT(){
       Serial.println("connected");
       mqtt.subscribe(CMD_TOPIC);
       mqtt.subscribe(SOIL_TOPIC);
+      mqtt.subscribe(MODE_TOPIC);  // Subscribe to mode control topic
     }else{
       Serial.print(mqtt.state()); Serial.println(" retry"); delay(2000);
     }
@@ -164,27 +167,45 @@ void mqttCallback(char* topic, byte* payload, unsigned len) {
   String msg;
   for (uint32_t i = 0; i < len; i++) msg += (char)payload[i];
   msg.trim(); msg.toUpperCase();
-  Serial.println("CMD from MQTT: " + msg);
-  // If MQTT message is an integer, set soil threshold to that value
-  bool isInt = true;
-  for (uint32_t i = 0; i < msg.length(); ++i) {
-    if (!isDigit(msg[i])) { isInt = false; break; }
-  }
-   // Default threshold
-  if (isInt && msg.length() > 0) {
-    soilThreshold = msg.toFloat();
-    Serial.printf("Soil threshold set to %.1f\n", soilThreshold);
+  
+  // Handle mode control messages
+  if (strcmp(topic, MODE_TOPIC) == 0) {
+    if (msg == "FALSE") {
+      isManualMode = true;
+      Serial.println("Switching to manual mode");
+    } else if (msg == "TRUE") {
+      isManualMode = false;
+      Serial.println("Switching to auto mode");
+    }
     return;
   }
-  if (msg)
-  if (msg != "TRUE" && msg != "FALSE") return;
-  LoRa.idle();
-  if (LoRa.beginPacket() && LoRa.print("CMD:" + msg) && LoRa.endPacket()) {
-    Serial.println("sent " + msg);
-  } else {
-    Serial.println("LoRa packet send failed");
+  
+  // Handle soil threshold messages
+  if (strcmp(topic, SOIL_TOPIC) == 0) {
+    bool isInt = true;
+    for (uint32_t i = 0; i < msg.length(); ++i) {
+      if (!isDigit(msg[i])) { isInt = false; break; }
+    }
+    if (isInt && msg.length() > 0) {
+      soilThreshold = msg.toFloat();
+      Serial.printf("Soil threshold set to %.1f\n", soilThreshold);
+      return;
+    }
   }
-  LoRa.receive();
+
+  // Handle valve control commands in manual mode
+  if (strcmp(topic, CMD_TOPIC) == 0 && isManualMode) {
+    if (msg == "TRUE" || msg == "FALSE") {
+      Serial.println("Manual CMD from MQTT: " + msg);
+      LoRa.idle();
+      if (LoRa.beginPacket() && LoRa.print("CMD:" + msg) && LoRa.endPacket()) {
+        Serial.println("Manual CMD sent: " + msg);
+      } else {
+        Serial.println("LoRa CMD send failed");
+      }
+      LoRa.receive();
+    }
+  }
 }
 
 void publishJSON(){
