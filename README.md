@@ -1,4 +1,5 @@
-# 🌿 AGROSENSE powered by AWLAK NANE -- Smart IoT-Based Farm Monitoring System
+# 🌿 AGROSENSE powered by AWLAK NANE 
+## Smart IoT-Based Farm Monitoring System
 
 This project connects a **remote farm** to a **central home dashboard** using **LoRa** and **Wi-Fi** technologies, enabling farmers to monitor and control environmental conditions such as temperature, humidity, and soil moisture. It features real-time data visualization, automatic irrigation control, and a custom-built Node-RED dashboard.
 
