@@ -14,7 +14,7 @@
  * - OLED display with custom icons for visual feedback
  * - NTP time synchronization
  * 
- * Author: [Your Name]
+ * Author: Nimesh, Pamith and Udith
  * Last Updated: May 2025
  *****************************************************************/
 

@@ -17,7 +17,7 @@
  * - Automated valve control based on commands
  * - Calibrated sensor readings
  * 
- * Author: [Your Name]
+ * Author: Nimesh, Pamith and Udith
  * Last Updated: May 2025
  *****************************************************************/
 
