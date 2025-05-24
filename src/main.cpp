@@ -123,86 +123,131 @@ void IRAM_ATTR onPacketISR(int) { packetReady = true; }
 void mqttCallback(char* topic, byte* payload, unsigned int len);
 
 void setup() {
+  // Initialize Serial communication
   Serial.begin(115200);
-  pinMode(LED_PIN, OUTPUT);  digitalWrite(LED_PIN, LOW);
-  Wire.begin(); Wire.setClock(400000);
-  oled.begin(SSD1306_SWITCHCAPVCC,0x3C);
+  
+  // Configure LED pin
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);
+  
+  // Initialize I2C for OLED
+  Wire.begin();
+  Wire.setClock(400000);
+  
+  // Initialize OLED display
+  oled.begin(SSD1306_SWITCHCAPVCC, 0x3C);
   oled.setTextColor(SSD1306_WHITE);
-  oled.setTextSize(2); oled.clearDisplay(); oled.println("Awlak nane"); oled.display();
+  oled.setTextSize(2);
+  oled.clearDisplay();
+  oled.println("AGRO SENSE");
+  oled.display();
 
+  // Setup WiFi and NTP time sync
   connectWiFi();
   configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, NTP_SERVER);
   struct tm timeinfo;
-  if (!getLocalTime(&timeinfo)) Serial.println("NTP Time Sync Failed");
-  else Serial.println(&timeinfo, "NTP Time: %Y-%m-%d %H:%M:%S");
+  if (!getLocalTime(&timeinfo)) {
+    Serial.println("NTP Time Sync Failed");
+  } else {
+    Serial.println(&timeinfo, "NTP Time: %Y-%m-%d %H:%M:%S");
+  }
 
+  // Configure MQTT
   mqtt.setServer(MQTT_HOST, MQTT_PORT);
   mqtt.setCallback(mqttCallback);
 
+  // Initialize LoRa radio
   SPI.begin();
-  LoRa.setPins(L_CS,L_RST,L_DIO0);
-  if(!LoRa.begin(RF_FREQ)){Serial.println("LoRa fail");while(true);}
-  LoRa.setSyncWord(SYNC_WORD); LoRa.enableCrc();
-  LoRa.onReceive(onPacketISR); LoRa.receive();
+  LoRa.setPins(L_CS, L_RST, L_DIO0);
+  
+  if(!LoRa.begin(RF_FREQ)) {
+    Serial.println("LoRa initialization failed");
+    while(true);  // Halt if LoRa init fails
+  }
+  
+  // Configure LoRa parameters
+  LoRa.setSyncWord(SYNC_WORD);
+  LoRa.enableCrc();
+  LoRa.onReceive(onPacketISR);
+  LoRa.receive();
+  
   Serial.println("Gateway ready");
 }
 
 void loop() {
-  // Serial.print(lastCommand);
+  // Maintain network connections
   if(WiFi.status()!=WL_CONNECTED) connectWiFi();
-  if(!mqtt.connected())           connectMQTT();
+  if(!mqtt.connected()) connectMQTT();
   mqtt.loop();
 
+  // Process LoRa packets when received
   if(packetReady){
-    packetReady=false;
+    packetReady = false;
     String raw;
+    
+    // Read and validate incoming LoRa data
     while(LoRa.available()){
-      char c=char(LoRa.read());
-      if(c>=32 && c<=126) raw+=c;
+      char c = char(LoRa.read());
+      if(c >= 32 && c <= 126) raw += c;  // Only accept printable ASCII
     }
-    weather=extractStr(raw,"Weather:");
-    tempC  =extractFloat(raw,"Temp:");
-    humP   =extractFloat(raw,"Hum:"); if(isnan(humP)) humP=extractFloat(raw,"Hm:");
-    lux    =extractFloat(raw,"Light level:"); if(isnan(lux)) lux=extractFloat(raw,"Lux:"); if(isnan(lux)) lux=extractFloat(raw,"Lx:");
-    moistP =extractFloat(raw,"Moisture:");
+
+    // Extract sensor data from LoRa packet
+    weather = extractStr(raw, "Weather:");
+    tempC   = extractFloat(raw, "Temp:");
+    humP    = extractFloat(raw, "Hum:"); 
+    if(isnan(humP)) humP = extractFloat(raw, "Hm:");
+    
+    // Handle multiple possible light level tags
+    lux = extractFloat(raw, "Light level:");
+    if(isnan(lux)) lux = extractFloat(raw, "Lux:");
+    if(isnan(lux)) lux = extractFloat(raw, "Lx:");
+    
+    moistP = extractFloat(raw, "Moisture:");
     valve  = extractStr(raw, "Valve:");
     
-    // Publish sensor data regardless of mode
+    // Publish sensor data to MQTT and update display
     mqtt.publish(VAL_TOPIC, valve.c_str());
     Serial.printf("RX: %s | T %.1f | H %.1f | L %.1f | M %.0f%% | V %s\n",
                   weather.c_str(), tempC, humP, lux, moistP, valve.c_str());
     publishJSON();
     drawOLED();
 
-    // Auto mode valve control logic
+    // Automated valve control logic (when in auto mode)
     if (!isManualMode) {
-      const float SUNLIGHT_THRESHOLD = 8.9; // Lux threshold for too sunny
+      const float SUNLIGHT_THRESHOLD = 8.5;  // Lux threshold for too sunny
+      
+      // Check environmental conditions
       const bool isDry = moistP < soilThreshold;
       String weatherUpper = weather;
       weatherUpper.toUpperCase();
       const bool isRaining = weather.length() > 0 && weatherUpper.indexOf("RAIN") != -1;
       const bool isTooSunny = lux > SUNLIGHT_THRESHOLD;
+      
+      // Determine if valve state should change
       bool newCommand = (isDry && !isRaining && !isTooSunny);
       
       if (newCommand != lastCommand) {
         lastCommand = newCommand;
         String cmd = newCommand ? "TRUE" : "FALSE";
+        
+        // Configure LoRa for transmission
         LoRa.idle();
-        const int maxRetries = 9;
-        int attempt = 0;
-        bool sent = false;
-        // Send the command multiple times with small delays, without checking for success
+        const int maxRetries = 3;
+        
+        // Send command multiple times for reliability
         for (int i = 0; i < maxRetries; ++i) {
           if (LoRa.beginPacket() && LoRa.print("CMD:" + cmd) && LoRa.endPacket()) {
-            Serial.println("CMD:" + cmd + " sent (burst " + String(i + 1) + ")");
+            Serial.println("Auto CMD sent (burst " + String(i + 1) + "): " + cmd);
           } else {
             Serial.println("LoRa CMD Send Failed (burst " + String(i + 1) + ")");
           }
-          delay(50); // Small delay between bursts
+          delay(50);  // Small delay between retries to avoid collisions
         }
         LoRa.receive();
       }
     }
+    
+    // Return to listening mode
     LoRa.receive();
   }
 }
@@ -229,12 +274,15 @@ void connectMQTT(){
 }
 
 void mqttCallback(char* topic, byte* payload, unsigned len) {
+  // Convert payload to string and normalize format
   String msg;
   for (uint32_t i = 0; i < len; i++) msg += (char)payload[i];
-  msg.trim(); msg.toUpperCase();
+  msg.trim(); 
+  msg.toUpperCase();  // Normalize to uppercase for case-insensitive comparison
   
-  // Handle mode control messages
+  /*-------------------- Mode Control Handler --------------------*/
   if (strcmp(topic, MODE_TOPIC) == 0) {
+    // FALSE = Manual Mode, TRUE = Auto Mode
     if (msg == "FALSE") {
       isManualMode = true;
       Serial.println("Switching to manual mode");
@@ -245,12 +293,17 @@ void mqttCallback(char* topic, byte* payload, unsigned len) {
     return;
   }
   
-  // Handle soil threshold messages
+  /*-------------------- Soil Threshold Handler --------------------*/
   if (strcmp(topic, SOIL_TOPIC) == 0) {
+    // Validate that message contains only digits
     bool isInt = true;
     for (uint32_t i = 0; i < msg.length(); ++i) {
-      if (!isDigit(msg[i])) { isInt = false; break; }
+      if (!isDigit(msg[i])) { 
+        isInt = false; 
+        break; 
+      }
     }
+    // Update threshold if valid number received
     if (isInt && msg.length() > 0) {
       soilThreshold = msg.toFloat();
       Serial.printf("Soil threshold set to %.1f\n", soilThreshold);
@@ -258,26 +311,29 @@ void mqttCallback(char* topic, byte* payload, unsigned len) {
     }
   }
 
-  // Handle valve control commands in manual mode
+  /*-------------------- Valve Control Handler --------------------*/
   if (strcmp(topic, CMD_TOPIC) == 0 && isManualMode) {
     if (msg == "TRUE" || msg == "FALSE") {
       Serial.println("Manual CMD from MQTT: " + msg);
-      // Set lastCommand accordingly
-      if (msg == "TRUE") {
-      lastCommand = true;
-      } else if (msg == "FALSE") {
-      lastCommand = false;
-      }
+      
+      // Update last command state
+      lastCommand = (msg == "TRUE");
+      
+      // Configure LoRa for transmission
       LoRa.idle();
-      // Send the command multiple times (burst), similar to auto mode
-      for (int i = 0; i < 3; ++i) {
-      if (LoRa.beginPacket() && LoRa.print("CMD:" + msg) && LoRa.endPacket()) {
-        Serial.println("Manual CMD sent (burst " + String(i + 1) + "): " + msg);
-      } else {
-        Serial.println("LoRa CMD send failed (burst " + String(i + 1) + ")");
+      const int maxRetries = 3;  // Number of transmission attempts
+      
+      // Send command multiple times for reliability
+      for (int i = 0; i < maxRetries; ++i) {
+        if (LoRa.beginPacket() && LoRa.print("CMD:" + msg) && LoRa.endPacket()) {
+          Serial.println("Manual CMD sent (burst " + String(i + 1) + "): " + msg);
+        } else {
+          Serial.println("LoRa CMD send failed (burst " + String(i + 1) + ")");
+        }
+        delay(50);  // Small delay between retries to avoid collisions
       }
-      delay(50); // Small delay between bursts
-      }
+      
+      // Return to receiving mode
       LoRa.receive();
     }
   }
@@ -341,33 +397,6 @@ void drawOLED() {
   if (weatherUpper.indexOf("RAIN") != -1) {
     oled.drawBitmap(100, 42, rain_emoji, 8, 8, SSD1306_WHITE);
   } else if (lux > 9) {
-    oled.drawBitmap(100, 42, sun_emoji, 8, 8, SSD1306_WHITE);
-  } else {
-    // Default cloud-like pattern for other conditions
-    oled.fillCircle(104, 46, 3, SSD1306_WHITE);
-    oled.fillCircle(100, 46, 2, SSD1306_WHITE);
-    oled.fillCircle(108, 46, 2, SSD1306_WHITE);
-  }
-
-  // Time and valve state at bottom
-  struct tm timeinfo;
-  if (getLocalTime(&timeinfo)) {
-    char timeStr[9];
-    strftime(timeStr, sizeof(timeStr), "%H:%M:%S", &timeinfo);
-    oled.setCursor(0, 54);
-    oled.printf("%s", timeStr);
-  }
-
-  // Valve state
-  oled.setCursor(70, 54);
-  oled.printf("V:%s", valve.c_str());
-
-  oled.display();
-}
-
-char weatherIconAscii(const String& w,float luxVal){
-  String u=w; u.toUpperCase();
-  if (u.indexOf("RAIN")!=-1) return 'R';        // Rain
   if (luxVal>9)              return 'S';        // Sunny / bright
   return 'C';                                   // Cloud/other
 }
