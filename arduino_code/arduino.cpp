@@ -1,3 +1,26 @@
+/*****************************************************************
+ * AGROSENSE - Arduino Field Node
+ * 
+ * This node is responsible for:
+ * 1. Environmental monitoring (temperature, humidity, light, rain)
+ * 2. Soil moisture sensing
+ * 3. Valve control for irrigation
+ * 4. Two-way LoRa communication with ESP32 gateway
+ * 
+ * Communication Protocol:
+ * TX Format: "Weather:{CLEAR|RAINING}|Temp:{°C}|Hum:{%}|Light level:{0-10}|Moisture:{0-100}|Valve:{OPEN|CLOSE}"
+ * RX Format: "CMD:{TRUE|FALSE}" - TRUE=open valve, FALSE=close valve
+ * 
+ * Features:
+ * - Efficient radio switching between RX/TX modes
+ * - Optimized LoRa parameters for reliability
+ * - Automated valve control based on commands
+ * - Calibrated sensor readings
+ * 
+ * Author: [Your Name]
+ * Last Updated: May 2025
+ *****************************************************************/
+
 /* ───── Arduino Libraries ───── */
 #include <SPI.h>
 #include <LoRa.h>
@@ -75,13 +98,16 @@ void setup() {
   Serial.println(F("Valve node ready"));
 }
 
-/* ───── Loop ───── */
+/* ───── Main Loop ───── */
 void loop() {
-  static uint32_t lastSend = 0;
+    static uint32_t lastSend = 0;
 
-  /* ---------- Check for incoming packets ---------- */
-  if (radioState == RECEIVING) {
-    int packetSize = LoRa.parsePacket();  
+    /* ---------- Command Reception (RX Mode) ---------- 
+     * The node spends most of its time in RX mode listening for valve commands
+     * from the gateway. Commands are processed immediately upon receipt.
+     */
+    if (radioState == RECEIVING) {
+        int packetSize = LoRa.parsePacket();  
     /*Check if packet has been received,
     and if so extract the message/command*/
     if (packetSize > 0) {
@@ -106,7 +132,15 @@ void loop() {
     }
   }
 
-  /* ---------- Periodic TX ---------- */
+  /* ---------- Sensor Data Transmission (TX Mode) ----------
+   * Every SEND_INTERVAL (10s), the node:
+   * 1. Switches to TX mode
+   * 2. Collects readings from all sensors
+   * 3. Formats and sends data packet
+   * 4. Returns to RX mode
+   * 
+   * The transmission time is minimized to avoid missing incoming commands
+   */
   if (millis() - lastSend >= SEND_INTERVAL) {
     lastSend = millis();
     
@@ -152,10 +186,14 @@ void loop() {
     switchToReceive();
   }
   
-  delay(10);  // Small delay to prevent tight loop
+  delay(10);  // Prevent excessive CPU usage while maintaining responsiveness
 }
 
-/* ───── Radio control functions ───── */
+/* ───── Radio Control Functions ───── */
+/**
+ * Switch radio to receive mode (RX)
+ * This is the default state where the node listens for valve commands
+ */
 void switchToReceive() {
   if (radioState != RECEIVING) {
     LoRa.receive();
@@ -164,6 +202,10 @@ void switchToReceive() {
   }
 }
 
+/**
+ * Switch radio to transmit mode (TX)
+ * Used briefly every SEND_INTERVAL to send sensor data
+ */
 void switchToTransmit() {
   if (radioState != TRANSMITTING) {
     LoRa.idle();  // Stop receiving first
@@ -172,24 +214,49 @@ void switchToTransmit() {
   }
 }
 
-/* ───── Sensor functions ───── */
+/* ───── Sensor Functions ───── */
+/**
+ * Read light level from LDR sensor
+ * @return float Light level on a 0-10 scale (0=dark, 10=bright)
+ * Values are calibrated for typical ambient light conditions
+ */
 float readLight() {
   int adc = analogRead(PIN_LDR);
   float level = mapFloat(ADC, 1200.0, -100.0, 0.0, 10.0); //calibrated the light sensor to show realistic values for ambient lighting
   return constrain(level, 0.0, 10.0); //ensure the light level is shown from 0 - 10 scale
 }
 
+/**
+ * Read soil moisture percentage
+ * @return int Moisture level 0-100% (0=dry, 100=saturated)
+ * ADC values calibrated for typical soil conditions
+ */
 int readMoist() {
   int adc = analogRead(PIN_SOIL);
   int moist = map(adc, 1023, 300, 0, 100);
   return constrain(moist, 0, 100);
 }
 
+/**
+ * Check rain sensor state
+ * @return bool True if rain is detected, false otherwise
+ * Sensor is active-low (LOW = rain detected)
+ */
 bool isRaining() {
   return digitalRead(PIN_RAIN) == LOW;
 }
 
-/* ───── custom map function to handle float values ───── */
+/* ───── Utility Functions ───── */
+/**
+ * Maps a float value from one range to another
+ * Similar to Arduino's map() but supports floating point
+ * @param x Input value to map
+ * @param in_min Input range minimum
+ * @param in_max Input range maximum
+ * @param out_min Output range minimum
+ * @param out_max Output range maximum
+ * @return float Mapped value in output range
+ */
 float mapFloat(float x, float in_min, float in_max, float out_min, float out_max) {
     return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 }

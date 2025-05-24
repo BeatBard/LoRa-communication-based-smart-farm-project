@@ -1,126 +1,170 @@
 /*****************************************************************
- *  ESP32  •  LoRa 2-way   •  Wi-Fi + MQTT + OLED + NTP Timestamp
- *  Publishes sensor JSON to  IoT-G9
- *  Listens for commands   on  IoT-G9/cmd   (ON / OFF)
- *  Relays those commands over LoRa to the Arduino valve node
+ * AGROSENSE - ESP32 LoRa Agricultural Automation Gateway
+ * 
+ * This gateway serves as a bridge between:
+ * 1. LoRa-connected field sensors/actuators
+ * 2. WiFi/MQTT for cloud connectivity
+ * 3. Local OLED display for status monitoring
+ * 
+ * Features:
+ * - Two-way LoRa communication with field nodes
+ * - MQTT integration for remote monitoring and control
+ * - Real-time environmental monitoring (temp, humidity, light, soil)
+ * - Automatic/Manual irrigation control based on conditions
+ * - OLED display with custom icons for visual feedback
+ * - NTP time synchronization
+ * 
+ * Author: [Your Name]
+ * Last Updated: May 2025
  *****************************************************************/
 
-#include <SPI.h>
-#include <LoRa.h>
-#include <WiFi.h>
-#include <PubSubClient.h>
-#include <ArduinoJson.h>
-#include <Wire.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
-#include <time.h>
-#include <sys/time.h>
+/* -------------------- Library Includes -------------------- */
+#include <Arduino.h>
+#include <SPI.h>          // For LoRa and OLED communication
+#include <LoRa.h>         // LoRa radio functionality
+#include <WiFi.h>         // WiFi connectivity
+#include <PubSubClient.h> // MQTT client
 
-/* ---------- Wi-Fi & MQTT ---------- */
+// Display and Graphics
+#include <Wire.h>             // I2C for OLED
+#include <Adafruit_GFX.h>     // Graphics core library
+#include <Adafruit_SSD1306.h> // OLED display driver
+
+// Utilities
+#include <ArduinoJson.h>      // JSON parsing/creation
+#include <time.h>             // Time functions
+#include <sys/time.h>         // System time utilities
+
+/* -------------------- Custom Icons (8x8 pixels) -------------------- */
 // Weather and sensor emojis (8x8 pixels)
-const unsigned char temp_emoji[] = {
+const uint8_t temp_emoji[] = {
+    0b00001000,
     0b00001100,
-    0b00010010,
-    0b00010010,
-    0b00010010,
-    0b00011110,
-    0b00011110,
-    0b00011110,
-    0b00001100
+    0b00001000,
+    0b00001100,
+    0b00001000,
+    0b00011100,
+    0b00011100,
+    0b00001000
 };
 
-const unsigned char rain_emoji[] = {
-    0b00111100,
-    0b01111110,
-    0b01111110,
-    0b00111100,
+const uint8_t humid_emoji[] = {
     0b00001000,
-    0b00010100,
     0b00001000,
-    0b00000100
-};
-const unsigned char water_droplet_emoji[] = {
-    0b00010000,  //    ▢▢▢■▢▢▢▢  - Tip
-    0b00111000,  //    ▢▢■▣■▢▢▢
-    0b01111100,  //    ▢■▣▣▣■▢▢
-    0b11111110,  //    ■▣▣▣▣▣■▢
-    0b11111110,  //    ■▣▣▣▣▣■▢
-    0b11111110,  //    ▢■▣▣▣■▢▢
-    0b01111110,  //    ▢▢■▣■▢▢▢
-    0b00111000   //    ▢▢▢■▢▢▢▢  - Base reflection
+    0b00011100,
+    0b00011100,
+    0b00111110,
+    0b00111110,
+    0b01111111,
+    0b00111110
 };
 
-const unsigned char sun_emoji[] = {
+const uint8_t moist_emoji[] = {
+    0b00000100,
+    0b00001100,
+    0b00011100,
+    0b00111100,
+    0b01111000,
+    0b00110000,
+    0b00100000,
+    0b00000000
+};
+
+const uint8_t sun_emoji[] = {
     0b00001000,
     0b00101010,
     0b00011100,
-    0b01111111,
+    0b01111110,
     0b00011100,
     0b00101010,
     0b00001000,
     0b00000000
 };
 
-const unsigned char moisture_emoji[] = {
-    0b00001000,    // Single drop
-    0b00011100,
-    0b00111110,
-    0b00001000,    // Second drop
-    0b00011100,
-    0b00111110,
-    0b00001000,    // Third drop
-    0b00011100
+const uint8_t rain_emoji[] = {
+    0b01110000,
+    0b11111100,
+    0b01110010,
+    0b00001001,
+    0b00010010,
+    0b00100100,
+    0b01001000,
+    0b10010000
 };
 
-const char* WIFI_SSID  = "Pamith";
-const char* WIFI_PASS  = "11111111";
-const char* MQTT_HOST  = "test.mosquitto.org";
+/* -------------------- Network Configuration -------------------- */
+// WiFi Settings
+const char* WIFI_SSID = "Pamith";
+const char* WIFI_PASS = "11111111";
+
+// MQTT Configuration
+const char* MQTT_HOST = "test.mosquitto.org";
 const uint16_t MQTT_PORT = 1883;
-const char* PUB_TOPIC  = "IoT-G9";
-const char* VAL_TOPIC = "IoT-G9/valve";
-const char* CMD_TOPIC  = "IoT-G9/cmd";
-const char* SOIL_TOPIC = "IoT-G9/soil";
-const char* MODE_TOPIC = "IoT-G9/mode";  // New topic for mode control
-bool isManualMode = false;  // false = auto mode, true = manual mode
 
-/* ---------- NTP ---------- */
+// MQTT Topics
+const char* PUB_TOPIC = "IoT-G9";          // Main sensor data publication
+const char* VAL_TOPIC = "IoT-G9/valve";     // Valve status updates
+const char* CMD_TOPIC = "IoT-G9/cmd";       // Command reception
+const char* SOIL_TOPIC = "IoT-G9/soil";     // Soil threshold settings
+const char* MODE_TOPIC = "IoT-G9/mode";     // Operation mode control
+
+/* -------------------- System Configuration -------------------- */
+// NTP Settings
 const char* NTP_SERVER = "pool.ntp.org";
-const long  GMT_OFFSET_SEC = 5 * 3600 + 30 * 60;  // Sri Lanka GMT+5:30
-const int   DAYLIGHT_OFFSET_SEC = 0;
-bool lastCommand = false; // Default to false
-/* ---------- LoRa ---------- */
-constexpr long RF_FREQ = 433E6;
-constexpr uint8_t SYNC_WORD = 0xA5;
-constexpr gpio_num_t L_CS = GPIO_NUM_5;
-constexpr gpio_num_t L_RST = GPIO_NUM_14;
-constexpr gpio_num_t L_DIO0 = GPIO_NUM_26;
+const long GMT_OFFSET_SEC = 5 * 3600 + 30 * 60;  // Sri Lanka GMT+5:30
+const int DAYLIGHT_OFFSET_SEC = 0;
 
-/* ---------- OLED ---------- */
-Adafruit_SSD1306 oled(128, 64, &Wire, -1);
-constexpr uint32_t OLED_INTERVAL = 250;
+// LoRa Radio Configuration
+constexpr long RF_FREQ = 433E6;             // 433 MHz frequency band
+constexpr uint8_t SYNC_WORD = 0xA5;         // LoRa sync word
+constexpr gpio_num_t L_CS = GPIO_NUM_5;     // Chip select
+constexpr gpio_num_t L_RST = GPIO_NUM_14;   // Reset
+constexpr gpio_num_t L_DIO0 = GPIO_NUM_26;  // Interrupt
 
-/* ---------- LED ---------- */
-constexpr gpio_num_t LED_PIN = GPIO_NUM_2;
+// OLED Display Settings
+Adafruit_SSD1306 oled(128, 64, &Wire, -1);  // 128x64 OLED
+constexpr uint32_t OLED_INTERVAL = 250;      // Display refresh interval
 
-/* ---------- Objects ---------- */
-WiFiClient      net;
-PubSubClient    mqtt(net);
+// GPIO Configuration
+constexpr gpio_num_t LED_PIN = GPIO_NUM_2;   // Status LED
 
-/* ---------- Shared data ---------- */
-volatile bool packetReady = false;
-String weather="N/A", valve="N/A"; float tempC=NAN, humP=NAN, lux=NAN, moistP=NAN;
+/* -------------------- Global Variables -------------------- */
+// Communication Objects
+WiFiClient net;
+PubSubClient mqtt(net);
 
-/* ---------- Prototypes ---------- */
-void connectWiFi(),  connectMQTT();
-void publishJSON(),  drawOLED();
-String extractStr(const String&,const String&);
-float  extractFloat(const String&,const String&);
+// System State
+volatile bool packetReady = false;          // LoRa packet received flag
+bool isManualMode = false;                  // Operation mode flag
+bool lastCommand = false;                   // Last valve command state
+static float soilThreshold = 30.0;          // Moisture threshold
+
+// Sensor Data
+String weather = "N/A";                     // Current weather condition
+String valve = "N/A";                       // Valve state
+float tempC = NAN;                         // Temperature in Celsius
+float humP = NAN;                          // Humidity percentage
+float lux = NAN;                           // Light level
+float moistP = NAN;                        // Soil moisture percentage
+
+/* -------------------- Function Prototypes -------------------- */
+// Network Functions
+void connectWiFi();
+void connectMQTT();
+void mqttCallback(char* topic, byte* payload, unsigned int len);
+
+// Data Processing
+void publishJSON();
+String extractStr(const String&, const String&);
+float extractFloat(const String&, const String&);
 String getTimestamp();
 char weatherIconAscii(const String&, float);
-static float soilThreshold = 30.0;
-/* ---------- LoRa ISR ---------- */
+
+// Display Functions
+void drawOLED();
+
+// LoRa Interrupt Handler
 void IRAM_ATTR onPacketISR(int) { packetReady = true; }
-void mqttCallback(char* topic, byte* payload, unsigned int len);
 
 void setup() {
   // Initialize Serial communication
@@ -443,6 +487,33 @@ String getTimestamp() {
   char buffer[20];
   strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &timeinfo);
   return String(buffer);
+}
+
+/* -------------------- Helper Functions -------------------- */
+String extractStr(const String& packet, const String& key) {
+    int start = packet.indexOf(key);
+    if (start == -1) return "N/A";
+    
+    start += key.length();
+    int end = packet.indexOf(";", start);
+    if (end == -1) end = packet.length();
+    
+    return packet.substring(start, end);
+}
+
+float extractFloat(const String& packet, const String& key) {
+    String val = extractStr(packet, key);
+    return (val == "N/A") ? NAN : val.toFloat();
+}
+
+String getTimestamp() {
+    struct tm timeinfo;
+    if (!getLocalTime(&timeinfo)) {
+        return "TIME ERROR";
+    }
+    char buffer[20];
+    strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &timeinfo);
+    return String(buffer);
 }
 
 void (*_dummy)(char*,byte*,unsigned)=mqttCallback;
