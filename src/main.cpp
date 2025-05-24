@@ -397,6 +397,33 @@ void drawOLED() {
   if (weatherUpper.indexOf("RAIN") != -1) {
     oled.drawBitmap(100, 42, rain_emoji, 8, 8, SSD1306_WHITE);
   } else if (lux > 9) {
+    oled.drawBitmap(100, 42, sun_emoji, 8, 8, SSD1306_WHITE);
+  } else {
+    // Default cloud-like pattern for other conditions
+    oled.fillCircle(104, 46, 3, SSD1306_WHITE);
+    oled.fillCircle(100, 46, 2, SSD1306_WHITE);
+    oled.fillCircle(108, 46, 2, SSD1306_WHITE);
+  }
+
+  // Time and valve state at bottom
+  struct tm timeinfo;
+  if (getLocalTime(&timeinfo)) {
+    char timeStr[9];
+    strftime(timeStr, sizeof(timeStr), "%H:%M:%S", &timeinfo);
+    oled.setCursor(0, 54);
+    oled.printf("%s", timeStr);
+  }
+
+  // Valve state
+  oled.setCursor(70, 54);
+  oled.printf("V:%s", valve.c_str());
+
+  oled.display();
+}
+
+char weatherIconAscii(const String& w,float luxVal){
+  String u=w; u.toUpperCase();
+  if (u.indexOf("RAIN")!=-1) return 'R';        // Rain
   if (luxVal>9)              return 'S';        // Sunny / bright
   return 'C';                                   // Cloud/other
 }
