@@ -28,7 +28,7 @@ This project connects a **remote farm** to a **central home dashboard** using **
 
 ## 🌐 Dashboard Setup (Node-RED)
 
-- **File:** `flows.json`
+- **File:** `flows.json` (located in `node_red/`)
 - **Instructions:** Import this file into your local Node-RED editor to launch the visual dashboard.
 
 ### 📊 Dashboard Tabs Overview
