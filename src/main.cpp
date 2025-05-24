@@ -183,7 +183,7 @@ void setup() {
   oled.setTextColor(SSD1306_WHITE);
   oled.setTextSize(2);
   oled.clearDisplay();
-  oled.println("AGRO SENSE");
+  oled.println("Aulak nane");
   oled.display();
 
   // Setup WiFi and NTP time sync
