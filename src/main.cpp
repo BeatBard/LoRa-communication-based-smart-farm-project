@@ -94,8 +94,8 @@ const uint8_t rain_emoji[] = {
 
 /* -------------------- Network Configuration -------------------- */
 // WiFi Settings
-const char* WIFI_SSID = "Pamith";
-const char* WIFI_PASS = "11111111";
+const char* WIFI_SSID = "Redmi Note 11";
+const char* WIFI_PASS = "lfbn7105";
 
 // MQTT Configuration
 const char* MQTT_HOST = "test.mosquitto.org";
@@ -135,7 +135,7 @@ PubSubClient mqtt(net);
 
 // System State
 volatile bool packetReady = false;          // LoRa packet received flag
-bool isManualMode = false;                  // Operation mode flag
+bool isManualMode = true;                  // Operation mode flag
 bool lastCommand = false;                   // Last valve command state
 static float soilThreshold = 30.0;          // Moisture threshold
 
