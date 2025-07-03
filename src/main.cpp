@@ -384,7 +384,7 @@ void mqttCallback(char* topic, byte* payload, unsigned len) {
 }
 
 void publishJSON(){
-  StaticJsonDocument<256> doc;
+  JsonDocument doc;
   doc["weather"] = weather;
   doc["temp"] = tempC;
   doc["hum"] = humP;
@@ -418,7 +418,7 @@ void drawOLED() {
   oled.printf("%.1fC", tempC);
 
   // Humidity reading with droplet emoji
-  oled.drawBitmap(64, 17, water_droplet_emoji, 8, 8, SSD1306_WHITE);
+  oled.drawBitmap(64, 17, humid_emoji, 8, 8, SSD1306_WHITE);
   oled.setCursor(74, 18);
   oled.printf("%.1f%%", humP);
 
@@ -428,7 +428,7 @@ void drawOLED() {
   oled.printf("%.1f lx", lux);
 
   // Moisture reading with moisture emoji
-  oled.drawBitmap(64, 30, moisture_emoji, 8, 8, SSD1306_WHITE);
+  oled.drawBitmap(64, 30, moist_emoji, 8, 8, SSD1306_WHITE);
   oled.setCursor(74, 31);
   oled.printf("%.0f%%", moistP);
   // Weather status with dynamic weather icon
@@ -487,33 +487,6 @@ String getTimestamp() {
   char buffer[20];
   strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &timeinfo);
   return String(buffer);
-}
-
-/* -------------------- Helper Functions -------------------- */
-String extractStr(const String& packet, const String& key) {
-    int start = packet.indexOf(key);
-    if (start == -1) return "N/A";
-    
-    start += key.length();
-    int end = packet.indexOf(";", start);
-    if (end == -1) end = packet.length();
-    
-    return packet.substring(start, end);
-}
-
-float extractFloat(const String& packet, const String& key) {
-    String val = extractStr(packet, key);
-    return (val == "N/A") ? NAN : val.toFloat();
-}
-
-String getTimestamp() {
-    struct tm timeinfo;
-    if (!getLocalTime(&timeinfo)) {
-        return "TIME ERROR";
-    }
-    char buffer[20];
-    strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &timeinfo);
-    return String(buffer);
 }
 
 void (*_dummy)(char*,byte*,unsigned)=mqttCallback;
