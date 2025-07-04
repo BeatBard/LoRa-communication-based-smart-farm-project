@@ -159,6 +159,7 @@ String extractStr(const String&, const String&);
 float extractFloat(const String&, const String&);
 String getTimestamp();
 char weatherIconAscii(const String&, float);
+bool isValidSensorData(float temp, float hum, float light, float moist);
 
 // Display Functions
 void drawOLED();
@@ -248,6 +249,14 @@ void loop() {
     
     moistP = extractFloat(raw, "Moisture:");
     valve  = extractStr(raw, "Valve:");
+    
+    // Validate sensor data before processing
+    if (!isValidSensorData(tempC, humP, lux, moistP)) {
+      Serial.printf("IGNORED Invalid sensor data: T %.1f | H %.1f | L %.1f | M %.0f%%\n",
+                    tempC, humP, lux, moistP);
+      LoRa.receive();  // Return to listening mode and skip processing
+      return;
+    }
     
     // Publish sensor data to MQTT and update display
     mqtt.publish(VAL_TOPIC, valve.c_str());
@@ -487,6 +496,41 @@ String getTimestamp() {
   char buffer[20];
   strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &timeinfo);
   return String(buffer);
+}
+
+bool isValidSensorData(float temp, float hum, float light, float moist) {
+  // Check for NaN values
+  if (isnan(temp) || isnan(hum) || isnan(light) || isnan(moist)) {
+    return false;
+  }
+  
+  // Check if all values are zero (invalid sensor reading)
+  if (temp == 0.0 && hum == 0.0 && light == 0.0 && moist == 0) {
+    return false;
+  }
+  
+  // Check reasonable ranges for each sensor
+  // Temperature: -40°C to 85°C (typical sensor range)
+  if (temp < -40.0 || temp > 85.0) {
+    return false;
+  }
+  
+  // Humidity: 0% to 100%
+  if (hum < 0.0 || hum > 100.0) {
+    return false;
+  }
+  
+  // Light level: should be non-negative
+  if (light < 0.0) {
+    return false;
+  }
+  
+  // Moisture: 0% to 100%
+  if (moist < 0.0 || moist > 100.0) {
+    return false;
+  }
+  
+  return true;  // All checks passed
 }
 
 void (*_dummy)(char*,byte*,unsigned)=mqttCallback;
